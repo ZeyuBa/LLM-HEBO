@@ -64,6 +64,41 @@ async def call_openai_server_func(inputs, model="gpt-3.5-turbo", max_decode_step
     outputs = await asyncio.gather(*tasks)
     return outputs
 
+import transformers
+import torch
+
+async def call_huggingface_single_prompt(prompt, model="meta-llama/Meta-Llama-3-8B-Instruct", max_decode_steps=20, temperature=0.8):
+
+  pipeline = transformers.pipeline(
+      "text-generation",
+      model=model,
+      model_kwargs={"torch_dtype": torch.bfloat16},
+      device="cuda",
+  )
+
+
+  terminators = [
+      pipeline.tokenizer.eos_token_id,
+      pipeline.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+  ]
+
+  outputs = pipeline(
+      prompt,
+      max_new_tokens=max_decode_steps,
+      eos_token_id=terminators,
+      do_sample=True,
+      temperature=temperature,
+      # top_p=0.9,
+  )
+  return outputs[0]["generated_text"][len(prompt):]
+
+async def call_huggingface_func(inputs, model="meta-llama/Meta-Llama-3-8B-Instruct", max_decode_steps=20, temperature=0.8):
+    """Asynchronously calls local llm with a list of input strings and returns their outputs."""
+    if isinstance(inputs, str):
+        inputs = [inputs]
+    tasks = [call_huggingface_single_prompt(input_str, model, max_decode_steps, temperature) for input_str in inputs]
+    outputs = await asyncio.gather(*tasks)
+    return outputs
 # Example usage
 async def main():
     responses = await call_openai_server_func(["Hello, world!"], "gpt-3.5-turbo", 20, 0.8)

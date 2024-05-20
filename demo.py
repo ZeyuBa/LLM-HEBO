@@ -23,7 +23,8 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 import prompt_utils
 _OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-_OPTIMIZER = "gpt-3.5-turbo"
+_OPTIMIZER="meta-llama/Meta-Llama-3-8B-Instruct"
+# _OPTIMIZER = "gpt-3.5-turbo"
 # _OPTIMIZER='gpt-4o'
 # ============== set optimization experiment configurations ================
 num_points = 50  # number of points in linear regression
@@ -39,15 +40,14 @@ num_generated_points_in_each_step = 8
 
 # ================ load LLM settings ===================
 optimizer_llm_name = _OPTIMIZER
-assert optimizer_llm_name in {
-    "gpt-3.5-turbo",
-    "gpt-4o",
-}
-openai_api_key = _OPENAI_API_KEY
+# assert optimizer_llm_name in {
+#     "gpt-3.5-turbo",
+#     "gpt-4o",
+# }
 
 if optimizer_llm_name in {"gpt-3.5-turbo", "gpt-4o"}:
     # assert openai_api_key, "The OpenAI API key must be provided."
-    openai.api_key = openai_api_key
+    openai.api_key = _OPENAI_API_KEY
 
 # =================== create the result directory ==========================
 datetime_str = (
@@ -69,16 +69,24 @@ print(f"result directory:\n{save_folder}")
 # ====================== optimizer model configs ============================
 optimizer_gpt_max_decode_steps = 1024
 optimizer_gpt_temperature = 1.0
+optimizer_huggingface_max_decode_steps = 1024
+optimizer_huggingface_temperature = 1.0
 import asyncio
 optimizer_llm_dict = dict()
-optimizer_llm_dict["max_decode_steps"] = optimizer_gpt_max_decode_steps
-optimizer_llm_dict["temperature"] = optimizer_gpt_temperature
+optimizer_llm_dict["max_decode_steps"] = optimizer_huggingface_max_decode_steps
+optimizer_llm_dict["temperature"] = optimizer_huggingface_temperature
 optimizer_llm_dict["batch_size"] = 1
+# call_optimizer_server_func = functools.partial(
+#     prompt_utils.call_openai_server_func,
+#     model=optimizer_llm_name,
+#     max_decode_steps=optimizer_gpt_max_decode_steps,
+#     temperature=optimizer_gpt_temperature,
+# )
 call_optimizer_server_func = functools.partial(
-    prompt_utils.call_openai_server_func,
+    prompt_utils.call_huggingface_func,
     model=optimizer_llm_name,
-    max_decode_steps=optimizer_gpt_max_decode_steps,
-    temperature=optimizer_gpt_temperature,
+    max_decode_steps=optimizer_huggingface_max_decode_steps,
+    temperature=optimizer_huggingface_temperature,
 )
 # ====================== try calling the servers ============================
 print("\n======== testing the optimizer server ===========")

@@ -1,0 +1,90 @@
+{
+    "0": {
+        "optimizer_llm_configs": {
+            "max_decode_steps": 1024,
+            "temperature": 1.0,
+            "batch_size": 1
+        },
+        "init_bounds": [
+            [
+                0.01,
+                1.0
+            ],
+            [
+                0.01,
+                1.0
+            ],
+            [
+                -10.0,
+                0.0
+            ],
+            [
+                1,
+                15
+            ],
+            [
+                0.0,
+                7.0
+            ],
+            [
+                -10.0,
+                10.0
+            ],
+            [
+                -10.0,
+                10.0
+            ],
+            [
+                0.1,
+                1.0
+            ]
+        ],
+        "max_num_steps": 3,
+        "max_num_pairs": 15,
+        "num_generated_points_in_each_step": 8
+    },
+    "1": {
+        "optimizer_llm_configs": {
+            "max_decode_steps": 1024,
+            "temperature": 1.0,
+            "batch_size": 1
+        },
+        "init_bounds": [
+            [
+                0.01,
+                1.0
+            ],
+            [
+                0.01,
+                1.0
+            ],
+            [
+                -10.0,
+                0.0
+            ],
+            [
+                1,
+                15
+            ],
+            [
+                0.0,
+                7.0
+            ],
+            [
+                -10.0,
+                10.0
+            ],
+            [
+                -10.0,
+                10.0
+            ],
+            [
+                0.1,
+                1.0
+            ]
+        ],
+        "max_num_steps": 3,
+        "max_num_pairs": 15,
+        "num_generated_points_in_each_step": 8
+    }
+}

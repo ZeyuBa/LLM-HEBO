@@ -101,7 +101,7 @@ async def call_huggingface_func(inputs, model="meta-llama/Meta-Llama-3-8B-Instru
     return outputs
 # Example usage
 async def main():
-    responses = await call_openai_server_func(["Hello, world!"], "gpt-3.5-turbo", 20, 0.8)
+    responses = await call_huggingface_func(["Hello, world!"], "/home/venido/LMs/LLMs/models/Meta-Llama-3-8B-Instruct", 20, 0.8)
     return (responses)
 
 if __name__ == "__main__":

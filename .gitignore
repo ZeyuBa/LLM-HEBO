@@ -2,4 +2,6 @@
 /examples/*
 /.env
 # /demo.py 
+/outputs
+
 

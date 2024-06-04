@@ -2,22 +2,22 @@
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
 import os
-os.environ['HTTP_PROXY'] = '127.0.0.1:7890'
-os.environ['HTTPS_PROXY'] = '127.0.0.1:7890'
+
 import asyncio
 from openai import AsyncOpenAI
 
-
-client = AsyncOpenAI(
+import asyncio
+import openai
+openai_client = AsyncOpenAI(
     # This is the default and can be omitted
     api_key=os.environ.get("OPENAI_API_KEY"),
     max_retries=5,
     timeout=30
 )
-
-import asyncio
-import openai
 async def call_openai_server_single_prompt(prompt, model="gpt-3.5-turbo", max_decode_steps=20, temperature=0.8):
+    os.environ['HTTP_PROXY'] = '127.0.0.1:7890'
+    os.environ['HTTPS_PROXY'] = '127.0.0.1:7890'
+
     """Asynchronously calls OpenAI API for a single prompt and returns the response."""
     try:
       param_dict={
@@ -28,7 +28,7 @@ async def call_openai_server_single_prompt(prompt, model="gpt-3.5-turbo", max_de
       }
       if '```json' in prompt:
         param_dict['response_format']={"type": "json_object"}
-      chat_completion = await client.chat.completions.create(**param_dict)
+      chat_completion = await openai_client.chat.completions.create(**param_dict)
       return chat_completion.choices[0].message.content
     except openai.APIConnectionError as e:
       # When the server could not be reached
@@ -57,6 +57,7 @@ async def call_openai_server_single_prompt(prompt, model="gpt-3.5-turbo", max_de
       return await call_openai_server_single_prompt(prompt, max_decode_steps=max_decode_steps, temperature=temperature)
 
 async def call_openai_server_func(inputs, model="gpt-3.5-turbo", max_decode_steps=20, temperature=0.8):
+
     """Asynchronously calls OpenAI server with a list of input strings and returns their outputs."""
     if isinstance(inputs, str):
         inputs = [inputs]
@@ -99,9 +100,31 @@ async def call_huggingface_func(inputs, model="meta-llama/Meta-Llama-3-8B-Instru
     tasks = [call_huggingface_single_prompt(input_str, model, max_decode_steps, temperature) for input_str in inputs]
     outputs = await asyncio.gather(*tasks)
     return outputs
+from ollama import AsyncClient,Client
+ollama_client=AsyncClient(host='http://localhost:11434')
+async def call_ollama_single_prompt(prompt,model='llama3:8b-instruct-fp16',max_decode_steps=20, temperature=0.8):
+    os.environ['HTTP_PROXY'] = ''
+    os.environ['HTTPS_PROXY'] = ''
+    format = 'json' if '```json' in prompt else ''
+    param_dict={
+         "messages":[{"role": "user", "content": prompt}],
+         "model":model,
+        #  "temperature":temperature,
+        #  "max_tokens":max_decode_steps,
+         "format":format
+      }
+    response = await ollama_client.chat(**param_dict)
+    return response['message']['content']
+async def call_ollama_func(inputs, model="llama3:8b-instruct-fp16", max_decode_steps=20, temperature=0.8):
+    """Asynchronously calls OpenAI server with a list of input strings and returns their outputs."""
+    if isinstance(inputs, str):
+        inputs = [inputs]
+    tasks = [call_ollama_single_prompt(input_str, model, max_decode_steps, temperature) for input_str in inputs]
+    outputs = await asyncio.gather(*tasks)
+    return outputs
 # Example usage
 async def main():
-    responses = await call_huggingface_func(["Hello, world!"], "/home/venido/LMs/LLMs/models/Meta-Llama-3-8B-Instruct", 20, 0.8)
+    responses = await call_ollama_func(["Hello, world!"]*2, "llama3:8b-instruct-fp16", 20, 0.8)
     return (responses)
 
 if __name__ == "__main__":

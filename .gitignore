@@ -2,6 +2,8 @@
 /examples/*
 /.env
 # /demo.py 
-/outputs
+/outputs/
+/kaggle
+
 
 

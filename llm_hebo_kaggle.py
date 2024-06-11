@@ -203,25 +203,31 @@ def divide_script(script):
 
 code_scetions=divide_script(script)
 
-# ====================== initialize search space ============================
-#1. summarize the data preprocessing code
-logger.info(f"{num_tokens_from_string(summary_prompt.format(code=code_scetions['import']+code_scetions['data']))} tks")
-rsp=call_optimizer_server_func(summary_prompt.format(code=code_scetions['import']+code_scetions['data']))
-data_report=rsp[0]
 
-#2. find the ml model and its docstring:
-logger.info(f"{num_tokens_from_string(give_docstring_prompt.format(code=code_scetions['import']+code_scetions['model']))} tks")
-rsp=call_optimizer_server_func(give_docstring_prompt.format(code=code_scetions['import']+code_scetions['model']))
-get_docstring_code=rsp[0]
-logger.info(f'{get_docstring_code=}')
-docstring=run_code(parse_code(get_docstring_code))
-logger.info(f'{docstring=}')
+def initilize(code_scetions):
+    # ====================== initialize search space ============================
+    #1. summarize the data preprocessing code
+    logger.info(f"{num_tokens_from_string(summary_prompt.format(code=code_scetions['import']+code_scetions['data']))} tks")
+    rsp=call_optimizer_server_func(summary_prompt.format(code=code_scetions['import']+code_scetions['data']))
+    data_report=rsp[0]
 
-#3. give hps list
-logger.info(f"{num_tokens_from_string(list_hps_prompt.format(report=data_report, docstring=docstring, model_code=code_scetions['import']+code_scetions['model']))} tks")
-rsp=call_optimizer_server_func(list_hps_prompt.format(report=data_report, docstring=docstring, model_code=code_scetions['import']+code_scetions['model']))
-hps_l=str(parse_json(rsp[0]))
-logger.info(f'{hps_l=}')
+    #2. find the ml model and its docstring:
+    logger.info(f"{num_tokens_from_string(give_docstring_prompt.format(code=code_scetions['import']+code_scetions['model']))} tks")
+    rsp=call_optimizer_server_func(give_docstring_prompt.format(code=code_scetions['import']+code_scetions['model']))
+    get_docstring_code=rsp[0]
+    logger.info(f'{get_docstring_code=}')
+    docstring=run_code(parse_code(get_docstring_code))
+    logger.info(f'{docstring=}')
+
+    #3. give hps list
+    logger.info(f"{num_tokens_from_string(list_hps_prompt.format(report=data_report, docstring=docstring, model_code=code_scetions['import']+code_scetions['model']))} tks")
+    rsp=call_optimizer_server_func(list_hps_prompt.format(report=data_report, docstring=docstring, model_code=code_scetions['import']+code_scetions['model']))
+    hps_l=str(parse_json(rsp[0]))
+    logger.info(f'{hps_l=}')
+
+    return data_report,docstring,hps_l
+
+# data_report,doctsring,hsp_l=initilize(code_scetions)
 
 #4. give recomended search space
 # logger.info(f"{num_tokens_from_string(search_space_prompt.format(report=data_report, docstring=docstring, hps_l=hps_l))} tks")
@@ -421,7 +427,7 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
     return {
         'result': result,
         'best_params': best_config,
-        'hebo_seq': result_l,
+        'result_seq': result_l,
         'past_X':opt.X,
         'past_y':opt.y
 
@@ -492,7 +498,7 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
                     result = loss['result']
                     regret_value = np.round(result, num_output_decimals)
                     best_params = loss['best_params']
-                    result_l = loss['hebo_seq']
+                    result_l = loss['result_seq']
                     past_X=loss['past_X']
                     past_y=loss['past_y']
                     single_step_values.append(regret_value)
@@ -532,22 +538,46 @@ hebo_config = {
 }
 
 conv_llm35_bo_seq_l=[]
-for _ in range(4):
-    # run LLM+HEBO with 6 repeated runs
-    res_l=run_tasks(hebo_config,call_optimizer_server_func)
-    # for _ in range(6):
-    llm35_bo_seq = np.array(res_l).reshape(-1, 1)
-    conv_llm35_bo_seq=np.minimum.accumulate(llm35_bo_seq)
-    conv_llm35_bo_seq_l.append(conv_llm35_bo_seq)
+# for _ in range(4):
+#     # run LLM+HEBO with 6 repeated runs
+#     res_l=run_tasks(hebo_config,call_optimizer_server_func)
+#     # for _ in range(6):
+#     llm35_bo_seq = np.array(res_l).reshape(-1, 1)
+#     conv_llm35_bo_seq=np.minimum.accumulate(llm35_bo_seq)
+#     conv_llm35_bo_seq_l.append(conv_llm35_bo_seq)
 # logger.info(res_l)
+    
 
+baseline_space_list=[
+    {'name' : 'n_estimators', 'type' : 'int', 'lb' : 10, 'ub' : 500},
+    {'name' : 'max_depth', 'type' : 'int', 'lb' : 3, 'ub' : 20},
+    {'name' : 'min_samples_split', 'type' : 'int', 'lb' : 2, 'ub' : 12},
+    {'name' : 'min_samples_leaf', 'type' : 'num', 'lb' : 1.0, 'ub' : 7.0},
+    {'name' : 'max_features', 'type' : 'cat', 'categories' :  ["sqrt","log2","None","1","2","3","4","5"]},
+]
+vanilla_seq_l=[]
+for i in range(4):
+    res_l=evaluate_loss(ml_model,ml_model_params,space_list=baseline_space_list,result_l=[],
+                           hebo_config={
+                                'optimizer': hebo_config['optimizer'],
+                                "rand_sample": hebo_config['rand_sample'],
+                                "hebo_iteration": max_num_steps*hebo_config['hebo_iteration'],
+                                "n_suggestions": 1,
+                                'scramble_seed': RANDOM_SEED+i
+                           }
+                           )['result_seq']
+    vanilla_seq = np.array(res_l).reshape(-1, 1)
+    vanilla_seq=np.minimum.accumulate(vanilla_seq)
+    vanilla_seq_l.append(vanilla_seq)
 
 results_plot_path = os.path.join(save_folder, "result.png")
 
 
 def plot_regret(seqs, labels, ideal_point, plot_path=results_plot_path):
     plt.figure(figsize=(8, 6))
+
     for seq, label in zip(seqs, labels):
+        logger.info(f'{seq.shape=}')
         if seq.shape[1] ==1: 
             plt.semilogy(seq - ideal_point, 'x-', label=label)
         else: 
@@ -563,17 +593,17 @@ def plot_regret(seqs, labels, ideal_point, plot_path=results_plot_path):
     plt.legend()
     plt.savefig(plot_path)
 
-for _ in conv_llm35_bo_seq_l:
-    print(_.shape)
+logger.info(f'{np.array(vanilla_seq_l).reshape(len(vanilla_seq_l),-1)=}')
 
 plot_regret([
-    np.array(conv_llm35_bo_seq_l).reshape(len(conv_llm35_bo_seq_l),-1),
+    # np.array(conv_llm35_bo_seq_l).reshape(len(conv_llm35_bo_seq_l),-1),
+    np.array(vanilla_seq_l).reshape(len(vanilla_seq_l),-1),
     # conv_llm35_bo_seq
     ],
     [
     # f'Random-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
     # f'BO-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
-    # f'HEBO-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
-    f'gpt3.5-HEBO-{max_num_steps}steps',
+    f'HEBO-{(max_num_steps)*hebo_config["hebo_iteration"]}iters',
+    # f'gpt3.5-HEBO-{max_num_steps}steps',
     #  f'gpt4o-HEBO-{num_reps}reps-{max_num_steps}steps-{num_generated_points_in_each_step}pts'
      ], 0.0)

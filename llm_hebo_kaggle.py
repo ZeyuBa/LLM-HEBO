@@ -227,21 +227,34 @@ def initilize(code_scetions):
 
     return data_report,docstring,hps_l
 
-# data_report,doctsring,hsp_l=initilize(code_scetions)
 
-#4. give recomended search space
-# logger.info(f"{num_tokens_from_string(search_space_prompt.format(report=data_report, docstring=docstring, hps_l=hps_l))} tks")
-# rsp=call_optimizer_server_func(search_space_prompt.format(report=data_report, docstring=docstring, hps_l=hps_l,history=''))
-# tmp=parse_json(rsp[0])
-# search_space=tmp[0]['suggestions'] if "suggestions" in tmp[0] else tmp[0]
-# logger.info(f'{search_space=}')
 
-#5. search and evaluation 
+
 data_code=code_scetions['import']+code_scetions['data']
 data_code+="\ndf_train,df_test=divide_df(df_all)\ndf_train.to_pickle('./df_train.pkl')\ndf_test.to_pickle('./df_test.pkl')"
 os.chdir(project_path)
 exec_result=run_code(data_code)
+
+
+model_code=code_scetions['import']
+model_code+="""\ndf_train=pd.read_pickle('df_train.pkl')
+df_test=pd.read_pickle('df_test.pkl')
+
+X_train = StandardScaler().fit_transform(df_train.drop(columns=['Survived']))
+y_train = df_train['Survived'].values
+X_test = StandardScaler().fit_transform(df_test.drop(columns=['Survived']))
+y_test=df_test['Survived'].values
+"""
+model_code+=code_scetions['model']
+exec_result=run_code(model_code)
+# print(exec_result)
 # logger.info(f'{exec_result=}')
+
+match = re.search(r'Average Score: (\d+\.\d+)', exec_result)
+average_score = float(match.group(1)) if match else None
+origin_script_regret=1-average_score
+
+
 df_train=pd.read_pickle(project_path / 'df_train.pkl')
 df_test=pd.read_pickle(project_path / 'df_test.pkl')
 
@@ -318,11 +331,14 @@ def process_output(search_space):
     for hp_d in search_space[:]:
         if hp_d['hp_name'] in ml_model_params:
             search_space.remove(hp_d)
-        else:
-            if hp_d['hp_type'] in ['int','num']:
+        elif hp_d['hp_name'] in ['n_estimators', 'max_depth',  'max_features',]:
+            if hp_d['hp_type'] =='int':
                 space_list.append(
-                    {'name' : hp_d['hp_name'], 'type' : hp_d['hp_type'], 'lb' : hp_d['search_space'][0], 'ub' : hp_d['search_space'][1]},
-
+                    {'name' : hp_d['hp_name'], 'type' : hp_d['hp_type'], 'lb' : -10, 'ub' : 10},
+                )
+            elif hp_d['hp_type'] =='num':
+                space_list.append(
+                    {'name' : hp_d['hp_name'], 'type' : hp_d['hp_type'], 'lb' : -1.0, 'ub' : 1.0},
                 )
             elif hp_d['hp_type'] in ['cat']:
                 space_list.append(
@@ -335,15 +351,23 @@ def process_output(search_space):
 
 
 def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config={},past_X=None,past_y=None,bound_range=None):
+    #5. search and evaluation 
     raw_result_l=result_l[:]
+
+    def inverse_scale_from_range(scaled_value, min_value, max_value, new_min, new_max):
+        return (scaled_value - new_min) * (max_value - min_value) / (new_max - new_min) + min_value
+
+
     def preprocess_func(df):
         return_dict = {}
-        for key,info in zip(df.columns,space_list):
+        for key,info,range in zip(df.columns,space_list,bound_range):
             value=df[key].iloc[0]
             hp_type=info['type']
             if hp_type == 'int':
+                value=inverse_scale_from_range(value,range[0],range[1],-10,10)
                 value=int(value)
             elif hp_type == 'num':
+                value=inverse_scale_from_range(value,range[0],range[1],-1.0,1.0)
                 value = np.round(value, 5)
             elif hp_type == 'cat' : 
                 try: 
@@ -389,6 +413,7 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
             return legal_range[0] <= value <= legal_range[1]
         else: return value in legal_range
     sp = DesignSpace().parse(space_list)
+    logger.info(f'{sp=}')
     opt = eval(hebo_config['optimizer'])(
         sp, model_name='gp', rand_sample=hebo_config['rand_sample'])
     # opt=BO(sp,model_name='gp', rand_sample=hebo_config['rand_sample'])
@@ -401,18 +426,19 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
         legal_row_indices = legal_row.index
         # logger.info('legal_row: ',legal_row)
         logger.info(f'legal_row_indices: {legal_row_indices.tolist()}')
-        # if legal_row_indices.tolist():
-        #     opt.X=legal_row
-        #     opt.y=past_y[legal_row_indices]
-        # else:
-        opt.X=past_X
-        opt.y=past_y
+        if legal_row_indices.tolist():
+            opt.X=legal_row
+            opt.y=past_y[legal_row_indices]
+        else:
+            opt.X=past_X
+            opt.y=past_y
         # logger.info(f'X: {opt.X}, y: {opt.y}')
     logger.info(f"{hebo_config['optimizer']} searching... \n")
     for i in range(hebo_config['hebo_iteration']):
         # print('#####',opt.y)
         try:
             rec = opt.suggest(n_suggestions=hebo_config['n_suggestions'],fix_input=None)
+            logger.info(f'{rec=}')
             result = objective(rec)
             y = np.array([result], dtype=np.float64).reshape(-1, 1)
             opt.observe(rec, y)
@@ -439,6 +465,7 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
     configs_dict = dict()
     results_dict = dict()
     old_value_pairs_set = set()
+    data_report,docstring,hps_l=initilize(code_scetions)
 
     for i_rep in range(num_reps):
 
@@ -481,6 +508,7 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
                 ) if old_value_pairs_set else ''
                 prompt=search_space_prompt.format(report=data_report, docstring=docstring, hps_l=hps_l,history=history,algo_name=algo_name)
                 meta_prompts_dict[i_step] = prompt
+                #4. givesuggestions
 
                 rsp=call_optimizer_server_func(prompt)
                 raw_outputs_dict[i_step] = rsp
@@ -538,21 +566,23 @@ hebo_config = {
 }
 
 conv_llm35_bo_seq_l=[]
-# for _ in range(4):
-#     # run LLM+HEBO with 6 repeated runs
-#     res_l=run_tasks(hebo_config,call_optimizer_server_func)
-#     # for _ in range(6):
-#     llm35_bo_seq = np.array(res_l).reshape(-1, 1)
-#     conv_llm35_bo_seq=np.minimum.accumulate(llm35_bo_seq)
-#     conv_llm35_bo_seq_l.append(conv_llm35_bo_seq)
+for _ in range(4):
+    # run LLM+HEBO with 6 repeated runs
+    res_l=run_tasks(hebo_config,call_optimizer_server_func)
+    # for _ in range(6):
+    llm35_bo_seq = np.array(res_l).reshape(-1, 1)
+    conv_llm35_bo_seq=np.minimum.accumulate(llm35_bo_seq)
+    conv_llm35_bo_seq_l.append(conv_llm35_bo_seq)
 # logger.info(res_l)
     
+# Most important features for RF algo: 
+# n_estimators,max_features, max_depth
 
 baseline_space_list=[
-    {'name' : 'n_estimators', 'type' : 'int', 'lb' : 10, 'ub' : 500},
+    {'name' : 'n_estimators', 'type' : 'int', 'lb' : 100, 'ub' : 2000},
     {'name' : 'max_depth', 'type' : 'int', 'lb' : 3, 'ub' : 20},
-    {'name' : 'min_samples_split', 'type' : 'int', 'lb' : 2, 'ub' : 12},
-    {'name' : 'min_samples_leaf', 'type' : 'num', 'lb' : 1.0, 'ub' : 7.0},
+    # {'name' : 'min_samples_split', 'type' : 'int', 'lb' : 2, 'ub' : 12},
+    # {'name' : 'min_samples_leaf', 'type' : 'num', 'lb' : 1.0, 'ub' : 7.0},
     {'name' : 'max_features', 'type' : 'cat', 'categories' :  ["sqrt","log2","None","1","2","3","4","5"]},
 ]
 vanilla_seq_l=[]
@@ -573,7 +603,7 @@ for i in range(4):
 results_plot_path = os.path.join(save_folder, "result.png")
 
 
-def plot_regret(seqs, labels, ideal_point, plot_path=results_plot_path):
+def plot_regret(seqs, labels, ideal_point, ori_script_regret, plot_path=results_plot_path):
     plt.figure(figsize=(8, 6))
 
     for seq, label in zip(seqs, labels):
@@ -588,6 +618,9 @@ def plot_regret(seqs, labels, ideal_point, plot_path=results_plot_path):
                                 mean_regret - std_regret, 
                                 mean_regret + std_regret, 
                                 alpha=0.3, )  # Filled area with slightly lower transparency
+    
+    plt.axhline(y=ori_script_regret, color='r', linestyle='--', label=f'Original script: {ori_script_regret}')
+
     plt.xlabel('Evaluation')
     plt.ylabel('Regret')
     plt.legend()
@@ -596,14 +629,14 @@ def plot_regret(seqs, labels, ideal_point, plot_path=results_plot_path):
 logger.info(f'{np.array(vanilla_seq_l).reshape(len(vanilla_seq_l),-1)=}')
 
 plot_regret([
-    # np.array(conv_llm35_bo_seq_l).reshape(len(conv_llm35_bo_seq_l),-1),
     np.array(vanilla_seq_l).reshape(len(vanilla_seq_l),-1),
+    np.array(conv_llm35_bo_seq_l).reshape(len(conv_llm35_bo_seq_l),-1),
     # conv_llm35_bo_seq
     ],
     [
     # f'Random-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
     # f'BO-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
     f'HEBO-{(max_num_steps)*hebo_config["hebo_iteration"]}iters',
-    # f'gpt3.5-HEBO-{max_num_steps}steps',
+    f'gpt3.5-HEBO-{max_num_steps}steps',
     #  f'gpt4o-HEBO-{num_reps}reps-{max_num_steps}steps-{num_generated_points_in_each_step}pts'
-     ], 0.0)
+     ], 0.0,ori_script_regret=origin_script_regret)

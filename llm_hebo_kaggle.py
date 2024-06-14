@@ -350,7 +350,7 @@ def process_output(search_space):
     return bound_info, space_list
 
 
-def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config={},past_X=None,past_y=None,bound_range=None):
+def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config={},past_X=None,past_y=None,real_past_X=None,bound_range=None,scaled=True):
     #5. search and evaluation 
     raw_result_l=result_l[:]
 
@@ -360,22 +360,38 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
 
     def preprocess_func(df):
         return_dict = {}
-        for key,info,range in zip(df.columns,space_list,bound_range):
-            value=df[key].iloc[0]
-            hp_type=info['type']
-            if hp_type == 'int':
-                value=inverse_scale_from_range(value,range[0],range[1],-10,10)
-                value=int(value)
-            elif hp_type == 'num':
-                value=inverse_scale_from_range(value,range[0],range[1],-1.0,1.0)
-                value = np.round(value, 5)
-            elif hp_type == 'cat' : 
-                try: 
-                    value= eval(value)
-                except: value=value
-            else: value= value
+        if bound_range is not None:
+            for key,info,range in zip(df.columns,space_list,bound_range):
+                value=df[key].iloc[0]
+                hp_type=info['type']
+                if hp_type == 'int':
+                    value=inverse_scale_from_range(value,range[0],range[1],-10,10) 
+                    value=int(value)
+                elif hp_type == 'num':
+                    value=inverse_scale_from_range(value,range[0],range[1],-1.0,1.0) 
+                    value = np.round(value, 5)
+                elif hp_type == 'cat' : 
+                    try: 
+                        value= eval(value)
+                    except: value=value
+                else: value= value
 
-            return_dict[key]=value
+                return_dict[key]=value
+        else: 
+            for key,info in zip(df.columns,space_list):
+                value=df[key].iloc[0]
+                hp_type=info['type']
+                if hp_type == 'int':
+                    value=int(value)
+                elif hp_type == 'num':
+                    value = np.round(value, 5)
+                elif hp_type == 'cat' : 
+                    try: 
+                        value= eval(value)
+                    except: value=value
+                else: value= value
+
+                return_dict[key]=value
         return return_dict
 
     def objective(df):
@@ -409,11 +425,15 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
 
     # Function to check if a value is within the legal range
     def is_in_legal_range(value, legal_range):
-        if isinstance(value,int) or isinstance(value,float): 
+        if isinstance(value,int):                
+            # value=int(inverse_scale_from_range(value,legal_range[0],legal_range[1],-10,10))
+            return legal_range[0] <= value <= legal_range[1]
+        elif isinstance(value,float):
+            # value=inverse_scale_from_range(value,legal_range[0],legal_range[1],-1.0,1.0)
             return legal_range[0] <= value <= legal_range[1]
         else: return value in legal_range
     sp = DesignSpace().parse(space_list)
-    logger.info(f'{sp=}')
+    # logger.info(f'{sp=}')
     opt = eval(hebo_config['optimizer'])(
         sp, model_name='gp', rand_sample=hebo_config['rand_sample'])
     # opt=BO(sp,model_name='gp', rand_sample=hebo_config['rand_sample'])
@@ -421,8 +441,9 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
     if 'scramble_seed' in hebo_config:opt.scramble_seed=hebo_config['scramble_seed']
     if past_X is not None:
         legal_ranges = bound_range
+        
         # Get the indices of rows where all values are within their legal ranges
-        legal_row=past_X[past_X.apply(lambda row: all(is_in_legal_range(row[col], legal_ranges[i]) for i,col in enumerate(past_X.columns)), axis=1)]
+        legal_row=real_past_X[real_past_X.apply(lambda row: all(is_in_legal_range(row[col], legal_ranges[i]) for i,col in enumerate(past_X.columns)), axis=1)]
         legal_row_indices = legal_row.index
         # logger.info('legal_row: ',legal_row)
         logger.info(f'legal_row_indices: {legal_row_indices.tolist()}')
@@ -433,12 +454,13 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
             opt.X=past_X
             opt.y=past_y
         # logger.info(f'X: {opt.X}, y: {opt.y}')
+    
     logger.info(f"{hebo_config['optimizer']} searching... \n")
     for i in range(hebo_config['hebo_iteration']):
         # print('#####',opt.y)
         try:
             rec = opt.suggest(n_suggestions=hebo_config['n_suggestions'],fix_input=None)
-            logger.info(f'{rec=}')
+            # logger.info(f'{rec=}')
             result = objective(rec)
             y = np.array([result], dtype=np.float64).reshape(-1, 1)
             opt.observe(rec, y)
@@ -448,14 +470,41 @@ def evaluate_loss(ml_model,ml_model_params,space_list, result_l=[], hebo_config=
             result_l=raw_result_l[:]
             result=1.0
             break
-    best_config = preprocess_func(opt.best_x)
+    if scaled and past_X is not None:
+        past_X_len=past_X.shape[0]
+        legal_ranges = bound_range
+        df=opt.X[past_X_len:] 
+        if df.shape[0]:
+            # Apply the inverse scaling function to each column with its respective parameters
+            for column,legal_range in zip(df.columns,legal_ranges):
+                value=df[column].iloc[0]
+                if isinstance(value,int):                
+                    df[column] = df[column].apply(inverse_scale_from_range, args=(legal_range[0], legal_range[1], -10, 10)).astype(int)
+                if isinstance(value,float):                
+                    df[column] = df[column].apply(inverse_scale_from_range, args=(legal_range[0],legal_range[1],-1.0,1.0))
+
+            real_past_X= pd.concat([real_past_X, df], axis=0) 
+    elif scaled and bound_range is not None: 
+        df=opt.X
+        legal_ranges = bound_range
+        # Apply the inverse scaling function to each column with its respective parameters
+        for column,legal_range in zip(df.columns,legal_ranges):
+            value=df[column].iloc[0]
+            if isinstance(value,int):                
+                df[column] = df[column].apply(inverse_scale_from_range, args=(legal_range[0], legal_range[1], -10, 10)).astype(int)
+            if isinstance(value,float):                
+                df[column] = df[column].apply(inverse_scale_from_range, args=(legal_range[0],legal_range[1],-1.0,1.0))
+
+        real_past_X= df
+    # best_config = preprocess_func(opt.best_x) if bound_range is not None else opt.best_x
 
     return {
         'result': result,
-        'best_params': best_config,
+        'best_params': '',
         'result_seq': result_l,
         'past_X':opt.X,
-        'past_y':opt.y
+        'past_y':opt.y,
+        'real_past_X': real_past_X
 
     }
 
@@ -495,7 +544,7 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
 
         # print(f"\nStep {i_step}:")
         i_step=0
-        past_X,past_y=None,None
+        past_X,past_y,real_past_X=None,None,None
         result_l=[]
         with tqdm(total=max_num_steps) as pbar:
             while i_step < max_num_steps:
@@ -521,7 +570,7 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
                                     for v in bound_info.values()])
                 logger.info(bound_range)
                 loss = evaluate_loss(
-                    ml_model, ml_model_params,space_list, result_l=result_l, hebo_config=hebo_config,past_X=past_X,past_y=past_y,bound_range=bound_range)
+                    ml_model, ml_model_params,space_list, result_l=result_l, hebo_config=hebo_config,past_X=past_X,past_y=past_y,real_past_X=real_past_X,bound_range=bound_range)
                 if 'result' in loss and loss['result']<1.0:
                     result = loss['result']
                     regret_value = np.round(result, num_output_decimals)
@@ -529,6 +578,8 @@ def run_tasks(hebo_config={}, call_optimizer_server_func=None):
                     result_l = loss['result_seq']
                     past_X=loss['past_X']
                     past_y=loss['past_y']
+                    real_past_X=loss['real_past_X']
+                    logger.info(f'{real_past_X=}')
                     single_step_values.append(regret_value)
                     info = tuple((('search_space', tuple(v['search_space'])),
                                         ('hp_type', v['hp_type']),
@@ -566,14 +617,14 @@ hebo_config = {
 }
 
 conv_llm35_bo_seq_l=[]
-for _ in range(4):
+for _ in range(6):
     # run LLM+HEBO with 6 repeated runs
     res_l=run_tasks(hebo_config,call_optimizer_server_func)
     # for _ in range(6):
     llm35_bo_seq = np.array(res_l).reshape(-1, 1)
     conv_llm35_bo_seq=np.minimum.accumulate(llm35_bo_seq)
     conv_llm35_bo_seq_l.append(conv_llm35_bo_seq)
-# logger.info(res_l)
+logger.info(res_l)
     
 # Most important features for RF algo: 
 # n_estimators,max_features, max_depth
@@ -586,7 +637,7 @@ baseline_space_list=[
     {'name' : 'max_features', 'type' : 'cat', 'categories' :  ["sqrt","log2","None","1","2","3","4","5"]},
 ]
 vanilla_seq_l=[]
-for i in range(4):
+for i in range(6):
     res_l=evaluate_loss(ml_model,ml_model_params,space_list=baseline_space_list,result_l=[],
                            hebo_config={
                                 'optimizer': hebo_config['optimizer'],
@@ -594,7 +645,8 @@ for i in range(4):
                                 "hebo_iteration": max_num_steps*hebo_config['hebo_iteration'],
                                 "n_suggestions": 1,
                                 'scramble_seed': RANDOM_SEED+i
-                           }
+                           },
+                           scaled=False
                            )['result_seq']
     vanilla_seq = np.array(res_l).reshape(-1, 1)
     vanilla_seq=np.minimum.accumulate(vanilla_seq)
@@ -619,7 +671,7 @@ def plot_regret(seqs, labels, ideal_point, ori_script_regret, plot_path=results_
                                 mean_regret + std_regret, 
                                 alpha=0.3, )  # Filled area with slightly lower transparency
     
-    plt.axhline(y=ori_script_regret, color='r', linestyle='--', label=f'Original script: {ori_script_regret}')
+    plt.axhline(y=ori_script_regret, color='r', linestyle='--', label=f'Original Result')
 
     plt.xlabel('Evaluation')
     plt.ylabel('Regret')
@@ -637,6 +689,6 @@ plot_regret([
     # f'Random-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
     # f'BO-{(max_num_steps+1)*hebo_config["hebo_iteration"]}iters',
     f'HEBO-{(max_num_steps)*hebo_config["hebo_iteration"]}iters',
-    f'gpt3.5-HEBO-{max_num_steps}steps',
+    f'ChatGPT3.5-HEBO-{max_num_steps}steps',
     #  f'gpt4o-HEBO-{num_reps}reps-{max_num_steps}steps-{num_generated_points_in_each_step}pts'
      ], 0.0,ori_script_regret=origin_script_regret)
